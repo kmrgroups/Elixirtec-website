@@ -1,8 +1,7 @@
-// Elixir Tec Corporation platform — core data model, v1
-// This is a foundation schema: it covers every entity needed for the
-// public site + CMS + RFQ -> quote -> order -> production -> dispatch
-// pipeline. Extend individual models as features are built out —
-// don't treat this as final/locked.
+// ============================================================================
+// PLATFORM FOUNDATION — multi-tenant corporate website + CMS + RFQ platform
+// Phase 1: architecture + database + auth + multi-tenancy
+// ============================================================================
 
 generator client {
   provider = "prisma-client-js"
@@ -13,317 +12,460 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------- AUTH & USERS ----------
+// ---------------------------------------------------------------------------
+// PLATFORM-LEVEL (super admin scope — not tied to any single tenant)
+// ---------------------------------------------------------------------------
 
-enum UserRole {
+enum PlatformRole {
   SUPER_ADMIN
-  WEBSITE_ADMIN
-  SALES_MANAGER
-  SALES_EXECUTIVE
-  ENGINEERING
-  PRODUCTION_MANAGER
-  QUALITY_MANAGER
-  DISPATCH_MANAGER
-  HR_MANAGER
-  CONTENT_MANAGER
-  VIEWER
+  PLATFORM_STAFF
 }
 
-model User {
-  id            String    @id @default(cuid())
-  name          String
-  email         String    @unique
-  passwordHash  String?
-  role          UserRole  @default(VIEWER)
-  isActive      Boolean   @default(true)
-  forcePasswordReset Boolean @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+model PlatformUser {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  name         String
+  role         PlatformRole @default(PLATFORM_STAFF)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
-  assignedRfqs     Rfq[]              @relation("AssignedRfq")
-  quoteVersions    QuoteVersion[]
-  productionUpdates ProductionUpdate[]
-  auditLogs        AuditLog[]
-  sessions         Session[]
-  accounts         Account[]
+  auditLogs AuditLog[]
 }
 
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String? @db.Text
-  session_state     String?
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
+enum SubscriptionPlan {
+  BASIC
+  PROFESSIONAL
+  ENTERPRISE
 }
 
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CANCELLED
 }
 
-// ---------- CUSTOMERS (Customer Portal) ----------
-
-model Customer {
-  id           String   @id @default(cuid())
-  companyName  String
-  contactName  String
-  email        String   @unique
-  passwordHash String?
-  phone        String?
-  whatsapp     String?
-  country      String?
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-
-  rfqs   Rfq[]
-  quotes Quote[]
-  orders Order[]
-}
-
-// ---------- CMS: PRODUCTS / SERVICES / TAXONOMY ----------
-
-model ProductCategory {
-  id       String    @id @default(cuid())
-  name     String
-  slug     String    @unique
-  parentId String?
-  parent   ProductCategory?  @relation("CategoryTree", fields: [parentId], references: [id])
-  children ProductCategory[] @relation("CategoryTree")
-  products Product[]
-}
-
-model Product {
-  id              String   @id @default(cuid())
-  name            String
-  code            String   @unique
-  sku             String?
-  categoryId      String?
-  category        ProductCategory? @relation(fields: [categoryId], references: [id])
-  description     String   @db.Text
-  detailedContent String?  @db.Text
-  specifications  Json?    // technical specs as structured key/value data
-  materials       String?
-  applications     String?
-  featured        Boolean  @default(false)
-  status          PublishStatus @default(DRAFT)
-  seoTitle        String?
-  seoDescription  String?
-  images          Media[]  @relation("ProductImages")
-  datasheet       Media?   @relation("ProductDatasheet", fields: [datasheetId], references: [id])
-  datasheetId     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-}
-
-model Service {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
-  description String   @db.Text
-  content     String?  @db.Text
-  benefits    String?
-  applications String?
-  status      PublishStatus @default(DRAFT)
-  images      Media[]  @relation("ServiceImages")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-}
-
-model BusinessDivision {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
-  description String   @db.Text
-  status      PublishStatus @default(DRAFT)
-  sortOrder   Int      @default(0)
-}
-
-model Industry {
-  id        String @id @default(cuid())
+// The tenant is the root of isolation. Every tenant-owned table below carries
+// a tenantId foreign key, and every query in the app layer MUST be scoped by
+// the authenticated session's tenantId — this is enforced at the API layer,
+// never trusted from client input.
+model Tenant {
+  id        String       @id @default(cuid())
+  slug      String       @unique // used for platformdomain.com/<slug> preview + subdomain routing
   name      String
-  slug      String @unique
-  sortOrder Int    @default(0)
+  industry  String?
+  status    TenantStatus @default(TRIAL)
+  plan      SubscriptionPlan @default(BASIC)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  users         TenantUser[]
+  website       Website?
+  products      Product[]
+  productCats   ProductCategory[]
+  services      Service[]
+  verticals     BusinessVertical[]
+  processes     Process[]
+  equipment     Equipment[]
+  certifications Certification[]
+  clients       Client[]
+  testimonials  Testimonial[]
+  leadership    LeadershipProfile[]
+  jobs          JobOpening[]
+  applications  Application[]
+  rfqs          Rfq[]
+  quotations    Quotation[]
+  socialLinks   SocialLink[]
+  locations     Location[]
+  contactSubs   ContactSubmission[]
+  blogs         BlogPost[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  domains       Domain[]
+  media         MediaAsset[]
+
+  @@index([status])
 }
 
-model Leadership {
-  id           String @id @default(cuid())
-  name         String
-  designation  String
-  bio          String? @db.Text
-  photoId      String?
-  linkedinUrl  String?
-  sortOrder    Int    @default(0)
-}
-
-model Certification {
-  id             String    @id @default(cuid())
-  name           String
-  certNumber     String?
-  issueDate      DateTime?
-  expiryDate     DateTime?
-  description    String?
-  certificateId  String?   // Media id of the cert image/PDF
-}
-
-model CaseStudy {
-  id          String   @id @default(cuid())
-  title       String
-  slug        String   @unique
-  industry    String?
-  challenge   String?  @db.Text
-  solution    String?  @db.Text
-  result      String?  @db.Text
-  status      PublishStatus @default(DRAFT)
-  publishedAt DateTime?
-}
-
-model NewsPost {
-  id          String   @id @default(cuid())
-  title       String
-  slug        String   @unique
-  body        String   @db.Text
-  status      PublishStatus @default(DRAFT)
-  publishedAt DateTime?
-  scheduledAt DateTime?
-}
-
-// ---------- CAREERS ----------
-
-model JobPosting {
-  id          String   @id @default(cuid())
-  title       String
-  department  String?
-  location    String?
-  employmentType String?
-  description String   @db.Text
-  status      PublishStatus @default(DRAFT)
-  deadline    DateTime?
-  applications JobApplication[]
-}
-
-model JobApplication {
-  id           String   @id @default(cuid())
-  jobId        String
-  job          JobPosting @relation(fields: [jobId], references: [id])
-  name         String
-  email        String
-  phone        String?
-  resumeId     String?
-  coverLetter  String?
-  status       String   @default("NEW")
-  notes        String?
-  createdAt    DateTime @default(now())
-}
-
-// ---------- MEDIA / CMS PAGES ----------
-
-model Media {
+model Domain {
   id        String   @id @default(cuid())
-  url       String
-  filename  String
-  mimeType  String
-  sizeBytes Int
-  altText   String?
-  folder    String?
-  uploadedAt DateTime @default(now())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  hostname  String   @unique // e.g. customer1.com or customer1.platform.com
+  isPrimary Boolean  @default(false)
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
 
-  productImages  Product[] @relation("ProductImages")
-  productDatasheets Product[] @relation("ProductDatasheet")
-  serviceImages  Service[] @relation("ServiceImages")
+  @@index([tenantId])
 }
 
-enum PublishStatus {
-  DRAFT
-  PUBLISHED
-  SCHEDULED
-  ARCHIVED
+// ---------------------------------------------------------------------------
+// TENANT-SCOPED USERS + RBAC
+// ---------------------------------------------------------------------------
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  EDITOR
+}
+
+model TenantUser {
+  id           String     @id @default(cuid())
+  tenantId     String
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String
+  passwordHash String
+  name         String
+  role         TenantRole @default(EDITOR)
+  permissions  Json?      // fine-grained overrides, e.g. { "rfq.manage": true }
+  isActive     Boolean    @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  rfqAssignments Rfq[] @relation("AssignedTo")
+
+  @@unique([tenantId, email]) // same email may exist across different tenants
+  @@index([tenantId])
+}
+
+// ---------------------------------------------------------------------------
+// WEBSITE / CMS
+// ---------------------------------------------------------------------------
+
+model Website {
+  id            String   @id @default(cuid())
+  tenantId      String   @unique
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template      String   @default("industrial") // industrial | engineering | corporate | technology | trading | services
+  primaryColor  String   @default("#0B0D10")
+  secondaryColor String  @default("#B8763E")
+  accentColor   String   @default("#4A5568")
+  logoUrl       String?
+  logoDarkUrl   String?
+  faviconUrl    String?
+  headerStyle   String   @default("standard")
+  footerStyle   String   @default("standard")
+  seoTitle      String?
+  seoDescription String?
+  publishedAt   DateTime?
+  updatedAt     DateTime @updatedAt
+
+  pages  Page[]
+  menus  Menu[]
+  banners HeroBanner[]
 }
 
 model Page {
   id        String   @id @default(cuid())
-  slug      String   @unique
+  websiteId String
+  website   Website  @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  slug      String   // "about", "contact", etc — "" for home
   title     String
-  status    PublishStatus @default(DRAFT)
+  status    String   @default("DRAFT") // DRAFT | REVIEW | APPROVED | PUBLISHED
+  sections  Section[]
   seoTitle  String?
   seoDescription String?
-  sections  PageSection[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([websiteId, slug])
 }
 
-model PageSection {
+model Section {
   id        String   @id @default(cuid())
   pageId    String
   page      Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
-  type      String   // hero, intro, stats, products, testimonials, cta, ...
-  content   Json      // section-specific structured content
-  sortOrder Int      @default(0)
+  type      String   // "hero" | "products-grid" | "verticals" | "testimonials" | ...
+  order     Int      @default(0)
   visible   Boolean  @default(true)
+  content   Json     // section-specific structured content
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pageId, order])
 }
 
-model SiteSetting {
-  key   String @id
-  value Json
+model Menu {
+  id        String     @id @default(cuid())
+  websiteId String
+  website   Website    @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  label     String     // "Primary", "Footer"
+  items     MenuItem[]
 }
 
-// ---------- RFQ ----------
+model MenuItem {
+  id       String  @id @default(cuid())
+  menuId   String
+  menu     Menu    @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  label    String
+  url      String
+  order    Int     @default(0)
+  parentId String?
+}
+
+model HeroBanner {
+  id          String   @id @default(cuid())
+  websiteId   String
+  website     Website  @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  heading     String
+  subheading  String?
+  desktopImg  String?
+  mobileImg   String?
+  videoUrl    String?
+  ctaText     String?
+  ctaUrl      String?
+  order       Int      @default(0)
+  enabled     Boolean  @default(true)
+}
+
+model MediaAsset {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  url       String
+  type      String   // image | video | pdf | document
+  filename  String
+  altText   String?
+  tags      String[]
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+// ---------------------------------------------------------------------------
+// CATALOG: verticals, products, services, processes, equipment
+// ---------------------------------------------------------------------------
+
+model BusinessVertical {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String
+  description String?
+  imageUrl    String?
+  order       Int      @default(0)
+
+  @@unique([tenantId, slug])
+}
+
+model ProductCategory {
+  id       String    @id @default(cuid())
+  tenantId String
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name     String
+  slug     String
+  products Product[]
+
+  @@unique([tenantId, slug])
+}
+
+model Product {
+  id            String           @id @default(cuid())
+  tenantId      String
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categoryId    String?
+  category      ProductCategory? @relation(fields: [categoryId], references: [id])
+  name          String
+  slug          String
+  sku           String?
+  shortDesc     String?
+  fullDesc      String?
+  specs         Json?
+  images        String[]
+  videoUrl      String?
+  datasheetUrl  String?
+  published     Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  rfqItems RfqItem[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, published])
+}
+
+model Service {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  slug      String
+  description String?
+  imageUrl  String?
+  features  String[]
+  order     Int      @default(0)
+
+  @@unique([tenantId, slug])
+}
+
+model Process {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  imageUrl    String?
+  order       Int      @default(0)
+}
+
+model Equipment {
+  id           String  @id @default(cuid())
+  tenantId     String
+  tenant       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  manufacturer String?
+  model        String?
+  capacity     String?
+  imageUrl     String?
+}
+
+model Certification {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  number      String?
+  issuer      String?
+  issueDate   DateTime?
+  expiryDate  DateTime?
+  imageUrl    String?
+  pdfUrl      String?
+}
+
+model Client {
+  id          String  @id @default(cuid())
+  tenantId    String
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  logoUrl     String?
+  industry    String?
+  website     String?
+}
+
+model Testimonial {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  author   String
+  role     String?
+  quote    String
+}
+
+model LeadershipProfile {
+  id          String  @id @default(cuid())
+  tenantId    String
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  designation String
+  photoUrl    String?
+  bio         String?
+  linkedin    String?
+  order       Int     @default(0)
+}
+
+// ---------------------------------------------------------------------------
+// CAREERS
+// ---------------------------------------------------------------------------
+
+model JobOpening {
+  id           String        @id @default(cuid())
+  tenantId     String
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title        String
+  department   String?
+  location     String?
+  type         String?       // full-time, contract...
+  description  String?
+  deadline     DateTime?
+  isOpen       Boolean       @default(true)
+  applications Application[]
+  createdAt    DateTime      @default(now())
+}
+
+enum ApplicationStatus {
+  NEW
+  SCREENING
+  SHORTLISTED
+  INTERVIEW
+  SELECTED
+  REJECTED
+  JOINED
+}
+
+model Application {
+  id         String            @id @default(cuid())
+  tenantId   String
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobId      String
+  job        JobOpening        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  name       String
+  email      String
+  phone      String?
+  resumeUrl  String?
+  status     ApplicationStatus @default(NEW)
+  notes      String?
+  createdAt  DateTime          @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// RFQ + QUOTATION
+// ---------------------------------------------------------------------------
 
 enum RfqStatus {
   NEW
-  RECEIVED
-  ASSIGNED
+  ACKNOWLEDGED
+  UNDER_REVIEW
   TECHNICAL_REVIEW
-  COMMERCIAL_REVIEW
-  AI_QUOTE_GENERATED
-  QUOTE_UNDER_REVIEW
-  QUOTE_APPROVAL_PENDING
-  QUOTE_APPROVED
+  COSTING
+  QUOTE_PREPARATION
   QUOTE_SENT
-  CUSTOMER_REVIEW
   NEGOTIATION
-  QUOTE_REVISED
-  CUSTOMER_ACCEPTED
-  ORDER_CREATED
-  CLOSED
-  LOST
+  ORDER_CONFIRMED
+  IN_PRODUCTION
+  QUALITY_INSPECTION
+  DISPATCHED
+  COMPLETED
+  CANCELLED
 }
 
 model Rfq {
-  id            String   @id @default(cuid())
-  rfqNumber     String   @unique // ETC-RFQ-2026-000001
-  customerId    String?
-  customer      Customer? @relation(fields: [customerId], references: [id])
-  contactName   String
-  companyName   String
+  id            String       @id @default(cuid())
+  tenantId      String
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rfqNumber     String       // human-readable, unique per tenant
+  customerName  String
+  company       String?
   email         String
   phone         String?
-  whatsapp      String?
   country       String?
-  productRef    String?
-  quantity      Int?
-  material      String?
-  specifications String? @db.Text
-  requiredDate  DateTime?
-  notes         String? @db.Text
-  status        RfqStatus @default(NEW)
-  priority      String?  @default("NORMAL")
+  message       String?
+  status        RfqStatus    @default(NEW)
   assignedToId  String?
-  assignedTo    User?    @relation("AssignedRfq", fields: [assignedToId], references: [id])
+  assignedTo    TenantUser?  @relation("AssignedTo", fields: [assignedToId], references: [id])
+  items         RfqItem[]
   attachments   RfqAttachment[]
-  quotes        Quote[]
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  activity      RfqActivity[]
+  quotations    Quotation[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([tenantId, rfqNumber])
+  @@index([tenantId, status])
+}
+
+model RfqItem {
+  id        String   @id @default(cuid())
+  rfqId     String
+  rfq       Rfq      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+  quantity  Int
+  material  String?
+  targetPrice Decimal? @db.Decimal(12, 2)
+  notes     String?
 }
 
 model RfqAttachment {
@@ -332,188 +474,121 @@ model RfqAttachment {
   rfq      Rfq    @relation(fields: [rfqId], references: [id], onDelete: Cascade)
   url      String
   filename String
-  mimeType String
 }
 
-// ---------- QUOTATION ----------
-
-enum QuoteStatus {
-  AI_DRAFT
-  HUMAN_REVIEW
-  PENDING_APPROVAL
-  APPROVED
-  SENT
-  REVISED
-  ACCEPTED
-  REJECTED
+model RfqActivity {
+  id        String   @id @default(cuid())
+  rfqId     String
+  rfq       Rfq      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  actor     String   // user name or "system" or "AI Assistant"
+  action    String
+  note      String?
+  createdAt DateTime @default(now())
 }
 
-model Quote {
-  id           String   @id @default(cuid())
-  quoteNumber  String   @unique
+model Quotation {
+  id           String          @id @default(cuid())
+  tenantId     String
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rfqId        String
-  rfq          Rfq      @relation(fields: [rfqId], references: [id])
-  customerId   String?
-  customer     Customer? @relation(fields: [customerId], references: [id])
-  status       QuoteStatus @default(AI_DRAFT)
-  currentVersion Int    @default(1)
-  aiGenerated  Boolean  @default(false)
-  aiReviewNotes Json?   // matched requirement, missing info, warnings — never treated as final
-  approvedById String?
-  approvedAt   DateTime?
+  rfq          Rfq             @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  quoteNumber  String
+  items        QuotationItem[]
+  subtotal     Decimal         @db.Decimal(12, 2)
+  tax          Decimal         @default(0) @db.Decimal(12, 2)
+  freight      Decimal         @default(0) @db.Decimal(12, 2)
+  discount     Decimal         @default(0) @db.Decimal(12, 2)
+  total        Decimal         @db.Decimal(12, 2)
   validUntil   DateTime?
-  pdfMediaId   String?
-  versions     QuoteVersion[]
-  lineItems    QuoteLineItem[]
-  order        Order?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  terms        String?
+  aiGenerated  Boolean         @default(false) // true if drafted by AI assistant
+  approvedBy   String?         // human approver, required before sending — never auto-sent
+  status       String          @default("DRAFT") // DRAFT | SENT | ACCEPTED | DECLINED
+  createdAt    DateTime        @default(now())
+
+  @@unique([tenantId, quoteNumber])
 }
 
-model QuoteVersion {
-  id         String   @id @default(cuid())
-  quoteId    String
-  quote      Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  versionNo  Int
-  changedById String?
-  changedBy  User?    @relation(fields: [changedById], references: [id])
-  changes    Json      // { field, oldValue, newValue }[]
-  createdAt  DateTime @default(now())
-}
-
-model QuoteLineItem {
-  id          String  @id @default(cuid())
-  quoteId     String
-  quote       Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  productId   String?
+model QuotationItem {
+  id          String    @id @default(cuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
   description String
   quantity    Int
-  unitPrice   Decimal @db.Decimal(14, 2)
-  taxPercent  Decimal @db.Decimal(5, 2) @default(0)
-  notes       String?
+  unitPrice   Decimal   @db.Decimal(12, 2)
+  lineTotal   Decimal   @db.Decimal(12, 2)
 }
 
-// ---------- ORDERS & PRODUCTION ----------
+// ---------------------------------------------------------------------------
+// MISC TENANT DATA
+// ---------------------------------------------------------------------------
 
-model Order {
-  id            String   @id @default(cuid())
-  orderNumber   String   @unique // ETC-ORD-2026-000001
-  quoteId       String   @unique
-  quote         Quote    @relation(fields: [quoteId], references: [id])
-  customerId    String
-  customer      Customer @relation(fields: [customerId], references: [id])
-  status        String   @default("CONFIRMED")
-  deliveryCommitment DateTime?
-  createdAt     DateTime @default(now())
-
-  production ProductionOrder?
+model SocialLink {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  platform String
+  url      String
 }
 
-model ProductionOrder {
-  id                String   @id @default(cuid())
-  orderId           String   @unique
-  order             Order    @relation(fields: [orderId], references: [id])
-  requiredQuantity  Int
-  producedQuantity  Int      @default(0)
-  rejectedQuantity  Int      @default(0)
-  currentStageId    String?
-  currentStage      ProductionStage? @relation(fields: [currentStageId], references: [id])
-  status            String   @default("PLANNING") // PLANNING, IN_PROGRESS, DELAYED, COMPLETED
-  startDate         DateTime?
-  targetDate        DateTime?
-  actualCompletionDate DateTime?
-  delayReason       String?
-  updates           ProductionUpdate[]
-  qualityInspections QualityInspection[]
-  dispatch          Dispatch?
+model Location {
+  id        String  @id @default(cuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  label     String
+  address   String
+  lat       Float?
+  lng       Float?
+  isPrimary Boolean @default(false)
 }
 
-model ProductionStage {
+model ContactSubmission {
   id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name      String
-  sortOrder Int      @default(0)
-  enabled   Boolean  @default(true)
-
-  productionOrders ProductionOrder[]
+  email     String
+  phone     String?
+  subject   String?
+  message   String
+  createdAt DateTime @default(now())
 }
 
-model ProductionUpdate {
-  id               String   @id @default(cuid())
-  productionOrderId String
-  productionOrder  ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
-  stageName        String
-  quantityCompleted Int     @default(0)
-  quantityRejected Int     @default(0)
-  machine          String?
-  operatorNote     String?
-  updatedById      String?
-  updatedBy        User?    @relation(fields: [updatedById], references: [id])
-  createdAt        DateTime @default(now())
-}
+model BlogPost {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title     String
+  slug      String
+  content   String
+  status    String   @default("DRAFT")
+  publishedAt DateTime?
 
-model QualityInspection {
-  id               String   @id @default(cuid())
-  productionOrderId String
-  productionOrder  ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
-  stage            String   // INCOMING, IN_PROCESS, FINAL
-  quantityAccepted Int      @default(0)
-  quantityRejected Int      @default(0)
-  reportMediaId    String?
-  nonConformance   String?
-  correctiveAction String?
-  createdAt        DateTime @default(now())
+  @@unique([tenantId, slug])
 }
-
-model Dispatch {
-  id               String   @id @default(cuid())
-  productionOrderId String  @unique
-  productionOrder  ProductionOrder @relation(fields: [productionOrderId], references: [id])
-  dispatchDate     DateTime?
-  transporter      String?
-  trackingNumber   String?
-  quantityDispatched Int?
-  invoiceRef       String?
-  status           String   @default("PENDING") // PENDING, DISPATCHED, IN_TRANSIT, DELIVERED
-}
-
-// ---------- NOTIFICATIONS / AUDIT ----------
 
 model Notification {
   id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   type      String
-  payload   Json
+  message   String
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }
 
 model AuditLog {
-  id         String   @id @default(cuid())
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id])
-  action     String
-  entityType String
-  entityId   String
-  metadata   Json?
-  createdAt  DateTime @default(now())
-}
+  id             String        @id @default(cuid())
+  tenantId       String?
+  tenant         Tenant?       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  platformUserId String?
+  platformUser   PlatformUser? @relation(fields: [platformUserId], references: [id])
+  actorLabel     String        // resolved display name at time of action
+  action         String
+  entity         String?
+  entityId       String?
+  ip             String?
+  createdAt      DateTime      @default(now())
 
-// ---------- AI KNOWLEDGE BASE / CHATBOT ----------
-
-model KnowledgeBaseDoc {
-  id        String   @id @default(cuid())
-  title     String
-  sourceUrl String?
-  mediaId   String?
-  content   String   @db.Text
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-}
-
-model ChatbotConversation {
-  id         String   @id @default(cuid())
-  visitorId  String?
-  transcript Json
-  escalated  Boolean  @default(false)
-  rfqCreatedId String?
-  createdAt  DateTime @default(now())
+  @@index([tenantId])
 }
