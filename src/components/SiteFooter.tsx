@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Mail, MapPin, Phone } from 'lucide-react';
+import BrandMark from './BrandMark';
 
 const siteLinks = [
   { href: '/about', label: 'About' },
@@ -22,16 +23,14 @@ export default function SiteFooter() {
       <div className="max-w-6xl mx-auto px-6 py-16 grid gap-12 md:grid-cols-[1.4fr_1fr_1fr]">
         <div>
           <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white font-display font-bold text-sm">
-              ET
-            </span>
+            <BrandMark className="h-9 w-9 shrink-0 rounded-lg" />
             <span className="font-display font-bold text-white tracking-wide">
               ELIXIR TEC <span className="font-medium text-white/60">CORPORATION</span>
             </span>
           </div>
           <p className="mt-5 max-w-sm text-sm leading-relaxed text-white/60">
-            Manufacturing intelligent, precision-machined components for the automotive and high-tech
-            industries — engineered for quality, automated for scale.
+            High-precision machining components for Automotive and Non-Automotive OEM supply chains —
+            manufactured in Mysuru, engineered for quality, automated for scale.
           </p>
         </div>
 
@@ -53,7 +52,7 @@ export default function SiteFooter() {
           <ul className="space-y-3 text-sm">
             <li className="flex items-start gap-2.5 text-white/70">
               <MapPin size={16} className="mt-0.5 shrink-0 text-brand-accent" />
-              <span>Hebbal Industrial Estate, Mysuru, Karnataka, India</span>
+              <span>No. 225/2, 1st Cross, Hebbal Industrial Estate, Mysuru – 570016, Karnataka, India</span>
             </li>
             <li className="flex items-center gap-2.5 text-white/70">
               <Phone size={16} className="shrink-0 text-brand-accent" />

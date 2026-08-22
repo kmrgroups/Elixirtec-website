@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Menu, X } from 'lucide-react';
+import BrandMark from './BrandMark';
 
 const navLinks = [
   { href: '/about', label: 'About' },
@@ -20,11 +21,14 @@ export default function SiteHeader() {
     <header className="sticky top-0 z-50 border-b border-brand-navy/10 bg-white/80 backdrop-blur-md">
       <div className="max-w-6xl mx-auto flex items-center justify-between px-6 py-4">
         <Link href="/" className="flex items-center gap-2.5 group" onClick={() => setOpen(false)}>
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-brand-blue to-brand-navy text-white font-display font-bold text-sm shadow-card transition-transform group-hover:scale-105">
-            ET
-          </span>
-          <span className="font-display font-bold text-brand-navy tracking-wide">
-            ELIXIR TEC <span className="font-medium text-brand-steel">CORPORATION</span>
+          <BrandMark className="h-9 w-9 shrink-0 rounded-lg shadow-card transition-transform group-hover:scale-105" />
+          <span className="leading-tight">
+            <span className="block font-display font-bold text-brand-navy tracking-wide">
+              ELIXIR TEC <span className="font-medium text-brand-steel">CORPORATION</span>
+            </span>
+            <span className="hidden sm:block text-[10px] tracking-[0.2em] text-brand-steel/70">
+              INNOVATE &middot; AUTOMATE &middot; TRANSFORM
+            </span>
           </span>
         </Link>
 
