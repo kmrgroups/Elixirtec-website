@@ -171,15 +171,33 @@ It now works like this, and none of it should be reverted:
   `users.pass_hash`.**
 - Changing a password, an administrator setting one, deleting a login, or
   running recovery all **end the relevant sessions immediately**.
-- The browser keeps the token in `sessionStorage` (per-tab, dies with the tab).
-- **Opening `idms.html` signs nobody in.** Any token left in the tab is signed
-  out on the server and discarded before the page draws, so the sign-in screen
-  always stands. This was asked for directly: a shared works PC must not walk
-  the next person into live quality records because the last one closed the lid.
-  The session still lasts while the tab is open — that is what lets the framed
-  website screens run without a second sign-in — it simply does not survive
-  re-opening the page. The login fields carry `autocomplete="new-password"` and
-  neutral names so the browser does not offer to save or refill them.
+- The browser keeps the token in `sessionStorage` (per-tab, dies with the
+  browser). **Never in localStorage** — that would survive closing the browser.
+- **Opening `idms.html` with no signed-in IDMS tab open signs nobody in.** Any
+  token left in the tab is signed out on the server and discarded, so the
+  sign-in screen stands. This was asked for directly: a shared works PC must not
+  walk the next person into live quality records because the last one closed
+  the lid. The login fields carry `autocomplete="new-password"` and neutral
+  names so the browser does not offer to save or refill them.
+- **A tab opened from a signed-in tab joins its session (v119).** Right-click →
+  Open Link in New Tab / Window on any menu item no longer asks for a second
+  sign-in — an explicit requirement, reversing the earlier one-sign-in-per-tab
+  rule. It works by *asking*, not storing: on opening, `Core.askOpenTabs()`
+  posts on the same-origin `BroadcastChannel('idms-session')`; any tab that is
+  signed in (`Core.shareSession()` is told how to tell) answers with its token;
+  the new tab checks it with `action:'session'` before drawing anything. No tab
+  open, nobody answers, sign-in screen. **Signing out broadcasts `signed-out`**
+  with the dead token, and every tab holding it reloads to the sign-in screen.
+  A browser without BroadcastChannel simply asks for a sign-in, as before.
+  Known and accepted: any same-origin page can ask the channel, which is only
+  our own two pages; it does not widen what a script already running on this
+  origin could do. `sessionsharetest.mjs` covers it with several jsdom "tabs".
+- **The framed website screens read the tab's session.** `index.html` kept its
+  token in localStorage while core.js had moved to sessionStorage, so RFQ
+  Pipeline, HR and Site Admin inside the IDMS had no token and asked for a
+  second login. In `?embed=` mode it now reads (and writes) sessionStorage,
+  which a same-origin frame shares with its tab; outside embed mode (`#me`) it is
+  unchanged.
 - The sign-in screen shows the company logo, name and address from the site
   profile (readable without a session, which is why it can be shown before one
   exists) and carries **Powered by — KMR Groups of Companies**.
@@ -1282,6 +1300,533 @@ added to the menu between Accounts and Admin.
 - Spacing is applied ad hoc: 772 inline `style=` attributes in `idms.html` using
   15 different `margin-top` values. That is why screens look slightly different
   from one another. Normalising it changes pixels, so it was not done here.
+
+## Live Production — the guide, and the bug it was hiding
+
+**The feature had never worked.** `machine-gateway/gateway.mjs` posted to
+`cfg.idmsIngestUrl + '/state'` → `/api/cnc/state`. Vercel routes `api/cnc.js` to
+`/api/cnc` and **nothing below it**, so every push came back 404. Even reaching
+the handler would not have helped: the ingest branch requires
+`what === 'state'`, and neither the query string nor the body carried it. The
+Live Monitor therefore sat on *"No CNC machines connected yet"* permanently,
+with no way for anyone to tell whether it was their wiring or the software.
+
+The gateway now posts to `/api/cnc?what=state` and **also puts `what` in the
+body**, so the ingest still resolves if a proxy strips the query string. A
+dropped link is logged and survived rather than thrown; a 401 and a 404 each
+print the specific thing to fix. `SETUP-CNC-UNIVERSAL.md` carried the same wrong
+URL and is corrected.
+
+`cnctest.mjs` pins the URL shape at both ends. **Do not change the ingest path
+without changing both sides and that test.**
+
+### The Setup Guide
+
+`Live Production → Setup Guide — Connect a Machine` (`cnc_setup`). Seven steps,
+written for a maintenance engineer rather than a programmer. Three things it
+does that a written document cannot:
+
+- **Generates the shared key** with `crypto.getRandomValues`, so nobody invents
+  a weak one. It is shown once and **deliberately never stored** — not in
+  `idms_settings`, not anywhere. `cnctest` asserts it does not reach the server.
+- **Writes `config.json` from a form.** A mistyped comma in hand-written JSON was
+  the commonest failure; now the file is generated, and `idmsIngestUrl` is built
+  from `location.origin` so it cannot be wrong.
+- **Asks the server whether data has actually arrived** and answers in a
+  sentence that names the fix — not a status code. A machine that has gone quiet
+  for over two minutes is called out rather than shown as live.
+
+The machine list is saved to `idms_settings` key `cnc_gateway` so it need not be
+retyped. Two rules are enforced: a duplicate machine code is refused (two
+machines under one code overwrite each other's readings, and the figures would
+be wrong in a way nobody would spot), and a non-simulator machine with no IP is
+refused.
+
+**The test machine matters more than it looks.** It lets somebody prove the key,
+the URL, the firewall and the whole chain before touching a CNC — so when a real
+machine fails, the fault is known to be between the gateway PC and that machine
+and nowhere else. Keep it.
+
+The empty state on the Live Monitor links here. Landing on an empty screen with
+nowhere to go is why this feature was never commissioned.
+
+**Still to do:** the gateway pushes every state every `pushMs` whether it changed
+or not — 30 invocations/minute/machine on Vercel. Fine for a few machines, worth
+making change-only before a works-wide rollout. And the guide tells the user to
+verify part count against the machine's own counter for a full shift before
+trusting it; that instruction is load-bearing and should not be softened.
+
+## The four "moved to the IDMS" screens — what "merged" actually meant
+
+Four staff screens reached from the IDMS menu were website pages shown inside
+an `<iframe>` (`data-panel="embed"`, `#em-frame`). That is why they read as a
+remote-desktop view rather than part of the IDMS: each one is a second
+document, with its own navy header bar, its own Sign Out / View Website / Site
+Admin buttons, sitting inside a frame.
+
+**They do not all take the same fix, and finding that out was most of the
+work.** Before changing anything, each screen's actual data coupling was
+checked:
+
+- **My Attendance** → fully native now (`attendance_lookup` panel in
+  `idms.html`). It called `/api/hr?what=me`, the same DOB-gated endpoint the
+  public self-service page uses — meaning a staff member had to know an
+  employee's date of birth to look anything up. A new role-gated route,
+  `what=lookup` (`api/hr.js`), shares its query logic with `what=me` via one
+  `attendancePacket()` function rather than two copies that could drift. The
+  reconciliation arithmetic (present/paid-leave/LOP/OT/permission-hours) is
+  ported line-for-line from the website's `renderMe()`, so a manager sees
+  exactly what the employee sees of themselves. **The public `#me` self-service
+  page was deliberately left untouched** — it is reached by QR codes already
+  printed on employee ID cards, has no IDMS session, and removing it would
+  lock out every card already issued.
+
+- **Website Content admin, RFQ Pipeline, HR & Payroll** → chrome stripped, the
+  engine underneath **deliberately left on the website**. All three generate
+  branded, config-driven output — the live site's sections, quotations and
+  cost sheets, payslips and statutory forms — through the one shared `data`/
+  `DEFAULTS` content object and its `CO()`/`QC()`/`documentLogo()` accessors,
+  which is the same engine that renders the public pages. Copying any of the
+  three into `idms.html` would mean a second copy of company branding and
+  quoting/pay configuration, with no mechanism to keep the two in sync — a
+  change to the company GST number or the quoting validity period in one place
+  would quietly stop matching the other. That is a worse outcome than the
+  screen it would replace, and it is exactly the class of duplication the rest
+  of this pass exists to remove, not add. `.staff-bar`/`.admin-head`'s own
+  title, Sign Out, Site Admin and View Website are hidden under
+  `body.embedded`; Refresh and Publish stay, because they are real actions,
+  not window dressing. Positioning was deliberately **not** touched — each of
+  the three is already `position:fixed;inset:0`, which fills the iframe's own
+  viewport correctly on its own; an earlier draft of this fix also forced
+  `position:static`, which changed the admin panel's flex layout for no actual
+  benefit, and was reverted.
+
+### A real bug this uncovered, not just a look
+
+`index.html` and `core.js` store the session token under the same
+`localStorage` key, `app_token`. Same origin, so same storage. The "Sign Out"
+button inside RFQ Pipeline and HR & Payroll called `keepToken('')`, which
+cleared that key — **silently ending the IDMS tab's own session**, with nothing
+to explain why the IDMS asked for a fresh sign-in shortly after. Hiding those
+buttons under `body.embedded` (above) fixes the symptom described here; the
+underlying collision is documented in `tests/sitetest.mjs`, which sets the
+token, clicks Sign Out inside the embedded pipeline, and asserts the shared
+key is gone — so if either app's storage key is ever changed independently,
+that test explains why the other broke.
+
+### `#ppc-page` ("Production Planning") is not one of the four
+
+It still exists in `index.html` with the same `.staff-bar` chrome, but nothing
+in the IDMS menu opens it — `PPC & MMD` is already a native panel. It picked
+up the same `body.embedded` chrome rule as a side effect of sharing `.staff-bar`,
+but it is unreached dead weight otherwise, worth deleting in a future pass
+rather than this one.
+
+## Masters, Bulk Upload, Org Chart and DWM
+
+### DWM moved to HRM; Org Chart was already there
+
+Only DWM was under Production — Organisation Chart was already correctly
+under HRM. Moved DWM; no other change to the menu tree beyond the new Masters
+group below.
+
+### The Masters menu, and what "ensure the screen exists" actually found
+
+Customer Addition, Supplier Master, Parts, Machine Addition and Bill of
+Materials were **relocated** (single location, not duplicated) into a new
+`masters` menu group. Three of the eight requested masters were **not
+missing** — they existed already, just buried under different names:
+
+- **Tools Addition** → `report_tool_history` already is the tool master (adds
+  a tool, tracks its life). Listed under Masters, not rebuilt.
+- **Consumables Addition** → `entry_rawmat` (Raw Material Master) already has
+  `Consumable` as one of its Type options, with the same auto-generated code
+  (`C.docNumber('rm')`) the request asked for. Listed under Masters as
+  "Consumables Addition (Raw Material Master)" rather than built as a second,
+  competing material list.
+- **Equipment / Instruments / Gauges** → the gauge register already lives on
+  `report_calibration`, because adding a gauge and scheduling its calibration
+  are correctly one screen, not two.
+
+Building new screens for these three would have meant a tool, a consumable or
+a gauge could end up under two different codes in two different places — the
+same class of problem the rest of this codebase's restructuring has been
+removing, not adding. `LABEL[panel id]` resolves to whichever menu entry runs
+last in `MENU.forEach` (array order), so the page header shows the screen's
+real identity (e.g. "Raw Material Master") even when reached via its Masters
+shortcut; the Masters menu label itself says both names so this isn't a
+surprise.
+
+### Parts gained real drawing upload
+
+`p-drg` was a drawing **number** field only — no file. Parts now has a file
+input wired to the existing `C.uploadFile()` (the same mechanism the Home
+Banner image uses, backed by `api/assets.js`), stored as `data.drawingFile`
+and shown as a clickable link in the parts list.
+
+### Bulk Upload — one engine, eight categories, in `BULK_KINDS`
+
+Customer, Supplier, Parts, Machine, Tools, Consumables, BOM, Gauges each get
+a downloadable CSV template, a hand-rolled parser (no CDN library — this
+should work the instant the screen opens, and the format is ours to define),
+per-row validation against both the database and duplicates within the same
+file, and only writes on pressing Import. Every row's own pass/fail is kept,
+not merged into one file-level result.
+
+BOM is the one category that is `grouped:true`: several CSV rows (one per
+material) become one bill-of-materials document per Part No. Adding a new
+category means adding one entry to `BULK_KINDS` — do not write a ninth bespoke
+screen.
+
+### Org Chart: redrawn, not rebuilt
+
+The tree-building logic (payroll cross-check, reporting-loop detection) was
+already more capable than the reference and is untouched. It was rendering as
+a plain nested `<ul><li>` with no chart CSS, so the browser drew it as an
+indented bulleted list. Added the standard pure-CSS horizontal box-and-
+connector-line technique — `ul{display:flex}` + `li::before/::after` for the
+lines — which only changes the drawing, not the tree. Added the PDF
+Signatories row (saved to `idms_settings.org_signatories`, a single default
+since the chart itself is one shared document) and split Print into
+**Print Full** / **Print Dept**, plus **View Full** / **View Dept** buttons
+that drive the pre-existing Show filter rather than adding a second, competing
+way to filter the chart.
+
+### DWM: Plan/Actual columns, and per-board sign-off
+
+Added explicit Plan and Actual count columns alongside the existing % column
+in `drawDwm()`'s grid (`daysInMonth + 4` header cells now, not `+2` —
+`dwmtest.mjs`'s column-count check was updated to match). Added a Prepared/
+Reviewed/Approved By row, saved into **`dwmDoc.data.signatories`** — the DWM
+document itself, not a shared default like the org chart's, because a DWM
+board belongs to one person for one month and a different employee's board
+must never show another's sign-off. Included in the printed report too.
+
+### Dropdown wiring: three machine fields were free text, wired to nothing
+
+Production Entry, Setup Approval and Self Inspection all had a "Machine"
+field as plain `<input>` — free text with no connection to the Machine
+Addition master, the same drift-risk the Machine Addition screen's own hint
+already warns about for routings. Given a `<datalist>` suggesting from
+`C.idms.docs('machine')`, the same pattern the GRN screen already used for
+suppliers (`fillMachineDatalist()`, shared by all three). Deliberately kept as
+free text, not a locked `<select>` — refusing an unrecognised machine mid-
+shift would stop the floor working.
+
+### Tests
+
+`tests/bulkuploadtest.mjs` (18), `tests/dropdownwiretest.mjs` (7),
+`tests/orgcharttest.mjs` (11), `tests/dwmsignofftest.mjs` (7) — 43 new checks.
+Whole suite: 546 passing.
+
+## Customer PO: two PO types, and a Sales Plan that is arrived at, not typed
+
+Renamed "Order Book" to **Customer PO** everywhere (menu, panel headings, print
+titles, the dashboard summary card) — no behaviour change, purely the name.
+
+### The two PO shapes, and a third that is really neither
+
+`orders` (kind:'order') now carries a `poType`: `onetime`, `ratecontract`, or
+`schedule`. All three still save to the same collection and the same form
+(`data-panel="sales_plan"`), with `soUpdateType()` showing and hiding fields —
+deliberately one screen, not three, so a schedule and the contract it depends
+on are never far apart.
+
+- **One-time PO** (`onetime`) — quantity, price, delivery date, all its own.
+  Unchanged from what Order Book always did.
+- **Rate Contract PO** (`ratecontract`) — customer, part, price, optional
+  validity dates. **No quantity, no delivery date** — `qty` is saved as `0`
+  and `due` as `''`, deliberately, so it can never be counted as demand by
+  accident. `soOpenContracts()` only offers ones still within validity when a
+  schedule is being raised.
+- **Schedule** (`schedule`) — raised against an open Rate Contract, chosen
+  from a dropdown. The moment a contract is chosen, `fillScheduleFromContract()`
+  fills **and locks** (`readOnly`/`disabled`) Customer Part No., Customer Part
+  Name, Price and Currency from that contract — a schedule cannot invent its
+  own price. Only quantity and delivery date are the schedule's own.
+  `scheduleAgainst` holds the contract's doc id, `scheduleAgainstPo` its PO
+  number, purely for display.
+
+Two bugs found and fixed while building this, both by the new test suite
+(`tests/customerpotest.mjs`) rather than by inspection:
+
+- Switching PO Type to Schedule called `fillScheduleFromContract()` — which
+  reads fields *from* a selected contract — instead of `fillContractDropdown()`,
+  which populates the list of contracts to choose from. The dropdown was
+  empty until the customer was reselected. Fixed; `soUpdateType()` now calls
+  the right one.
+- `loadOrders()` reset `#so-cust` with `customerOptions('')` (no selection
+  kept) after every save — meaning adding a Rate Contract and then
+  immediately raising a Schedule against it for the *same* customer required
+  reselecting the customer in between. `loadOrders()` now preserves the
+  current selection and refreshes the contract dropdown for it.
+
+### Sales Plan: computed, not typed
+
+`sales_monthly_plan` no longer has a "firm plan quantity" you type in. Demand
+for a customer/part/month is **`demandOrders()`** — every `onetime` or
+`schedule` order due that month, summed — with a manually entered forecast
+(`kind:'salesplan'`, unchanged doc shape) used **only** when no real PO or
+schedule exists for that month; `saveSalesPlan()` now refuses a forecast for
+a month a real PO already covers, so the two can never double-count. All of
+this lives in `salesPlanRows()`, which is the *single* place both the Sales
+Plan register and the Sales Dashboard now read from — they cannot disagree
+with each other because they are not two calculations, they are one.
+
+**Backward compatibility, deliberately protected by a test:** an order saved
+before `poType` existed has no such field. `isDemandOrder(v)` treats anything
+that is *not explicitly* `ratecontract` as demand — so pre-existing POs do
+not silently vanish from the Sales Plan the moment this deploys. Do not
+change that condition to an explicit allow-list of `onetime`/`schedule`
+without re-checking `customerpotest.mjs`'s "an order saved before PO types
+existed still counts as demand" case, which exists specifically to catch
+that regression.
+
+`priceFor()` and the customer↔part link (Parts screen → "Customers for this
+part") gained **Customer Part Name** (`custPartName`) alongside the
+Customer Part Number that already existed — both now flow through to Order
+Book/Customer PO's auto-fill, to `demandFor()`, and to every Sales Plan row.
+
+### Sales Dashboard: three views, one of them new
+
+Rewritten to call `salesPlanRows()` instead of filtering the raw `salesplan`
+docs directly — it was reading the *old*, now-fallback-only manual entries
+before this pass, which would have shown demand only from forecasts and
+missed every real PO. Added:
+
+- **% alongside the INR/USD values** on the Overall section (actual% and
+  pending% of demand, overall and per currency).
+- **Overall Sales Value — day-wise**, a new section using
+  `window.KPIX.charts.line` — the existing KPI chart engine, not a new one —
+  fed by summing each day's invoiced value. **INR only, deliberately**: a
+  chart mixing two currencies on one axis would not mean anything, and this
+  was the one place in this whole pass where the requirement asked for INR
+  specifically rather than "whichever currency the customer buys in" (kept
+  everywhere else, per an explicit decision to preserve existing multi-
+  currency support rather than narrow it).
+
+**A second, quieter bug found while rewiring this:** `excessForInvoice()`
+(used by both the Excess Sales section and the Sales Invoice screen's own
+"is this over the plan" check) called `planFor()`, which read *only* the old
+manual `salesplan` docs — so excess sales were being measured against
+forecasts, not real Customer PO commitments, and would have been wrong for
+any customer/part with a real PO but no matching manual forecast line.
+`planFor()` now delegates to `demandFor()`. Its return shape changed (`.qty`
+instead of `.data.firmQty`); both call sites that read the old shape
+(`saveSalesInvoice()` and `excessForInvoice()` itself) were updated — a
+third caller in `drawInvoiceRegister()` only did a truthy check and needed no
+change. Covered by `tests/salesdashboardtest.mjs`'s excess-sales case.
+
+### Tests
+
+`tests/customerpotest.mjs` (25) and `tests/salesdashboardtest.mjs` (14) — 39
+new checks, covering the full Rate Contract → Schedule → computed Sales Plan
+→ Dashboard chain end to end, not just each screen in isolation. Whole
+suite: 586 passing.
+
+## Matching the Esbee Sales Plan spreadsheet, and edit/delete for Sales Plan
+
+A real spreadsheet in daily use (Esbee_Sales_Plan.xlsx — Sales Plan register,
+two 31-day dispatch/value grids, a Dashboard bar chart, and two pivots:
+Customer vs Sales, Daily Value) was the reference for this pass. Its demand
+model (type a quantity once per part per month) was **not** adopted — Sales
+Plan stays computed from Customer PO, per the decision already recorded above
+— but its dashboard shape and its dispatch-tracking approach were.
+
+### Sales Invoice: a real invoice, not a log line
+
+Was one record = one customer/part/qty, no document produced. Rebuilt as a
+genuine header + multiple line items: one customer, one invoice number,
+several parts, a live subtotal/GST/total as lines are added, and pressing
+Save **both** writes the record and opens a real printable tax invoice
+(`printInvoiceDoc()`) — letterhead, Bill To, line items, GST summary — using
+`C.openReport()`, the same engine every other printed document in the IDMS
+uses. Nothing new was built for the document itself.
+
+**Everything that reads invoices now goes through one function:**
+`invoiceLines()` flattens every invoice's `data.lines[]` into individually
+attributable entries (customer, part, qty, value, which invoice and which
+line position). `invoicedQty()`, `invoicedValue()`, `excessForLine()`
+(replaces the old `excessForInvoice()` — excess is a property of a *line*,
+since one invoice can now have several), the day-wise dashboard chart, and
+the new per-customer day-wise view all call this rather than reading
+`salesInvoices` directly. Do not add a new reader of `salesInvoices` that
+assumes one invoice = one part; it will be silently wrong the first time
+someone raises a multi-line invoice.
+
+### Sales Dashboard: per-customer day-wise added
+
+`Daily Value` in the spreadsheet was a pivot: customer × day-of-month,
+dispatched value — genuinely different from the overall day-wise total
+already built. Added as a second chart, `sd-daywise-cust`, same INR-only
+scope and same reasoning as the overall one.
+
+### Edit and delete, on both Customer PO and Sales Plan
+
+Customer PO only had Remove before. Now has **Edit**: `editOrder(docId)`
+loads a PO/contract/schedule back into the exact same form `saveOrder()`
+validates — editing a schedule still cannot end up with a hand-typed price,
+because it goes through the same locking logic a new one would. `soEditing`
+holds which record is being changed; `saveOrder()` checks it to decide
+between creating and updating, and the duplicate-PO-number check exempts a
+record from matching itself while it's being edited.
+
+Sales Plan is a **computed** register, so "edit the row" has to mean "edit
+what's behind it." Each row backed by real orders gets a **Manage** button
+that expands to list every contributing PO/schedule, each with its own Edit
+(hands off to Customer PO's `editOrder()`, via `navigate()`) and Remove. A
+row backed only by a manual forecast gets a Remove for the forecast itself.
+`demandFor()` now returns `orderIds` (the real-demand case) or
+`forecastDocId` (the fallback case) alongside the figures, and
+`salesPlanRows()` carries them through — this is what the Manage button
+reads to know what it's managing.
+
+### A recurring mistake worth naming
+
+Twice in this pass, a `\'` meant for one literal backslash before an
+apostrophe in a JS string ended up as `\\'` — two backslashes — after being
+written through a tool call, breaking the script's syntax at load. Both were
+caught by the `node --check` step this project already runs after every
+edit, not by inspection. If a string built with `str_replace` needs an
+escaped apostrophe, prefer double-quoting the string instead (`"…don't…"`)
+to sidestep the escaping entirely, or verify the raw byte content with
+`cat -A` before moving on rather than assuming the tool call applied cleanly.
+
+### Tests
+
+`tests/editdeletetest.mjs` — 19 checks covering Edit/Cancel-edit on Customer
+PO and Manage/Edit/Remove on both PO-backed and forecast-backed Sales Plan
+rows. `tests/salesdashboardtest.mjs` was updated for the new multi-line
+invoice shape. Whole suite: 623 passing.
+
+## v119 — invoice against PO, the full tax invoice, bulk PO upload, sessions
+
+### Sales Invoice lines are raised against a Customer PO
+
+Choosing customer and part fills a **Customer PO dropdown** from `ivPoCandidates()`:
+every live one-time PO, schedule and open rate contract for that pair. **Never
+an obsolete one.** What is "left to invoice" on each is ordered quantity less
+what invoice lines already raised against that PO — saved ones (`invoiceLines()`
+now carries `poDocId`/`po`) *and* lines already on the invoice being built. The
+earliest-due PO with something left is pre-selected (schedules and POs before
+rate contracts); the dropdown exists because it is not always that one, and the
+hint says how many are on file. Rate, currency and customer part number follow
+the chosen PO. A "no PO for this line" choice is kept for samples.
+
+A schedule prints as `<contract PO> / Sch. <release>` and its date falls back to
+the contract's PO date, because the customer matches invoices to the contract.
+The header **Customer PO No. / PO Date are read-only and derived from the lines**
+(`ivHeaderPo`): one PO → its number and date; several → each number and "per
+line", and the document then prints PO and date under each line's description.
+
+Refusals: a second currency on one invoice; the same part against the same PO
+twice (the same part against two POs is allowed — end of one PO, start of the
+next); no place of supply; due date before invoice date; discount larger than
+the goods; negative charges; a ship-to GSTIN that is not 15 characters; Ack No.
+or QR without an IRN; an IRN that is not 64 hex characters.
+
+### One calculation: `ivCompute(lines, header)`
+
+Used by the screen totals, the save and the print — never three versions.
+Taxable value = goods − discount + freight + packing + other (GST is charged on
+the consideration including those). Tax is computed **per HSN code** with the
+discount and charges shared in proportion to value; the last HSN row takes the
+rounding so the rows add up exactly. Same state as the company GSTIN's code →
+CGST+SGST, anything else (including `96` export) → IGST. Reverse charge "Yes"
+states the tax but leaves it out of the grand total. Due date comes from the
+digits in the payment terms until somebody types one.
+
+### The printed tax invoice: `invoiceDocHtml()` + `IV_PRINT_CSS`
+
+Built to the works' tax-invoice template, every section in order: letterhead
+(logo, legal name, address, GSTIN, PAN, state and state code, phone, email,
+website), invoice details, e-invoice (IRN, Ack, QR — only when an IRN exists),
+bill to (with customer code, PAN from the GSTIN, state code), ship to, items
+(part no., description, drawing/rev, HSN, qty, UOM, rate, taxable), tax details
+by HSN, totals, amount in words, bank and UPI, traceability (the template's
+Field/Details layout, one Details column per line, four lines to a table),
+terms, declaration, signatory, and the computer-generated note.
+
+It is its own print window, not `C.openReport`, because the generic report has
+no cell borders. **Every cell is bordered, `table-layout:fixed`, and text uses
+`overflow-wrap:anywhere`** so a long value wraps inside its box. Money cells are
+`nowrap` and the columns are sized for them. This was checked by rendering a
+worst case in headless Chromium (six lines, 100-character names, 1,219-crore
+values, 64-character IRN) and asserting no cell's `scrollWidth` exceeds its
+width: only a 123,456.789 quantity overflowed, by 2px, and the Qty column was
+widened. If columns are changed, repeat that check. USD invoices group numbers
+the international way and read the amount in words in US dollars/millions.
+
+Invoices saved before v119 carry no `hsnSummary`; the print recomputes from
+their lines rather than failing.
+
+Company-level invoice settings that the website profile does not hold — UPI
+ID, jurisdiction, place, signatory override, terms, copies (1 or
+Original/Duplicate/Triplicate), show bank — live in `idms_settings` key
+`invoice_settings`, edited on the Sales Invoice screen. **Not in code.**
+
+### QR codes are drawn locally: `Core.qrSvg(text)`
+
+The e-invoice signed QR and the UPI QR carry invoice values, GSTINs and a
+payment handle; they must not go to a third-party image service (the website's
+ID cards still use one — a separate decision). `qrSvg` is a byte-mode ISO 18004
+encoder (versions 1–40, Reed–Solomon, all 8 masks scored). It was verified by
+decoding its output with jsQR at 20 lengths up to 2,300 bytes. **Do not tune the
+tables in it without re-running that decode.**
+
+### Customer PO
+
+- **PO documents:** a *PO document* column with **View** (new tab) and
+  **Download** (original file name) for any PO with `poFile`, and **Attach** for
+  one without. Attaching patches `poFile` directly with an audit reason — it is
+  *not* an Edit, because Edit makes a revision, which is right for a new price
+  and wrong for adding the paper. The Obsolete tab had one fewer body cell than
+  header cells; fixed while adding the column.
+- **Tentative labels name the month** ("Tentative — October"), from the
+  delivery date the tentatives project from (`tentativeFor` uses due+1, due+2),
+  or from this month until a date is typed. The year is added when it is not
+  this year.
+- `Core.uploadFile` now stores a file with no browser MIME type as
+  `application/octet-stream`; such files were refused by the asset store.
+
+### A revised PO was counted twice — fixed
+
+Editing a PO keeps the old record marked `obsolete`, but only the register's
+tabs knew that. `isDemandOrder`, `allocateProduction`, `orderProgress` (obsolete
+→ balance 0, which removes it from production plan, capacity, loading and the
+works dashboard in one place), `soOpenContracts`, `orderPriceFor`, the audit
+agent's order read and the invoice PO list now skip obsolete POs. The duplicate
+PO-number check also skipped nothing, so a PO could only ever be revised once —
+its own superseded copy was "a duplicate". `editdeletetest.mjs` had five
+failures that were this: its stub ignored `patch`, so the obsolete mark never
+landed, and it still expected an in-place update. The stub now behaves like the
+API and the checks assert revision behaviour, including a second revision.
+
+### Bulk upload: Customer PO and Sales Plan
+
+Two `BULK_KINDS` entries, `order` and `salesplan`, plus Masters menu items
+`bulk_po` / `bulk_salesplan` that open the same panel with the category chosen
+(`loadBulkUpload(preset)`), and shortcut buttons on Customer PO and Sales Plan.
+Column notes (`colHint`, written for every category but never shown)
+are now displayed with an optional `intro`.
+
+- **Customer PO** rows apply the screen's rules. The customer is found by name or
+  code; the part by our number *or* theirs, but only through that customer's
+  `cust_part` link. A schedule may name a rate contract on file **or an earlier
+  row of the same file** (`ctx.fileContracts` at validation, `ctx.savedContracts`
+  at import — rows import top to bottom); it takes the contract's price and
+  refuses one of its own. Dates are **DD-MM-YYYY** (day first, as Indian Excel
+  writes them) or YYYY-MM-DD; an impossible date is refused, not rolled over.
+- **Sales Plan** rows create `salesplan` forecasts, the fallback `demandFor()`
+  already reads. A month a real PO or a tentative already covers is refused, as
+  is a month already over and a forecast already on file — a forecast never sits
+  on top of demand.
+
+### Tests
+
+`invoicetest.mjs` (59), `bulkpotest.mjs` (33), `sessionsharetest.mjs` (17);
+`editdeletetest.mjs` corrected (22). Set `STRESS=1` when running
+`invoicetest.mjs` to also write `/tmp/invoice-stress.html` for the render check.
 
 ---
 

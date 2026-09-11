@@ -126,7 +126,7 @@ check('powered-by links to KMR Groups',
   /kmr-groups\.com/.test(window.document.querySelector('.gate .powered a').href));
 check('password field is not autofilled by the browser',
   $('g-pass').getAttribute('autocomplete') === 'new-password');
-check('no session token stored before sign-in', !window.localStorage.getItem('app_token'));
+check('no session token stored before sign-in', !window.sessionStorage.getItem('app_token'));
 
 // ---- 2. sign in ----
 $('g-user').value = 'tester'; $('g-pass').value = 'secret123';
@@ -136,11 +136,13 @@ check('signed in — app visible', $('app').style.display === '');
 
 // ---- 3. the menu ----
 const groups = [...window.document.querySelectorAll('#menubar .mgroup > a')].map(b => b.textContent.trim());
-/* 'Live Production' was added between Accounts and Admin after this list was
-   written, so the positional check below reported the whole menu as misordered.
-   The order asked for is otherwise unchanged. */
-const want = ['Home', 'Top Management', 'QMS', 'Marketing', 'NPD', 'Purchase & SCM', 'PPC & MMD',
-  'Production', 'Quality Assurance', 'Maintenance', 'HRM', 'Accounts', 'Live Production', 'Admin'];
+/* 'Live Production' was added between Accounts and Admin, and 'Masters' between
+   QMS and Marketing, after this list was written — the positional check below
+   reported the whole menu as misordered each time. The order asked for is
+   otherwise unchanged. */
+const want = ['Home', 'Top Management', 'QMS', 'Masters', 'Marketing', 'NPD', 'Purchase & SCM',
+  'PPC & MMD', 'Production', 'Quality Assurance', 'Maintenance', 'HRM', 'Accounts',
+  'Live Production', 'Admin'];
 want.forEach(w => check('menu has ' + w, groups.some(g => g.includes(w)), groups.join(' | ')));
 check('menu is in the asked-for order',
   want.slice(1).every((w, i) => groups.findIndex(g => g.includes(w)) > 0 &&
@@ -219,9 +221,13 @@ check('the entered figure reaches the dashboard', /1,?500/.test($('kd-body').inn
 nav('admin_site');
 await wait(120);
 check('website content opens the admin panel in a frame', /embed=admin/.test($('em-frame').src), $('em-frame').src);
-nav('emb_me');
+// My Attendance stopped being one of these screens: it is a native panel now
+// (see cnctest-style suite for the full behaviour), so this only checks it
+// no longer routes through the frame at all.
+nav('attendance_lookup');
 await wait(120);
-check('My Attendance opens in the IDMS', /embed=me/.test($('em-frame').src), $('em-frame').src);
+check('My Attendance is native, not framed',
+  !!$('al-emp') && !window.document.querySelector('.panel[data-panel="embed"]').classList.contains('on'));
 
 // ---- 10. the old Home Banner admin screen still saves (its settings survive;
 //      its image is deliberately no longer shown on Home — see #11) ----
@@ -243,9 +249,15 @@ check('the hero banner on Home reads from the website\'s own content record',
   $('hb-img').src.includes('hero-test.jpg'), $('hb-img').src);
 
 // ---- 12. the session token now survives a fresh top-level context, not just this tab ----
-check('token is kept in localStorage (survives Open Link in New Tab/Window)',
-  window.localStorage.getItem('app_token') === 'TOK', window.localStorage.getItem('app_token'));
-check('token is not left in sessionStorage', !window.sessionStorage.getItem('app_token'));
+/* Reversed deliberately. The token used to live in localStorage so it would
+   survive right-click → Open Link in New Tab. The requirement changed: a
+   second tab must NOT inherit the first tab's session and has to sign in on
+   its own, which is what sessionStorage gives — a new top-level browsing
+   context starts with its own, empty one. The trade is that closing the tab
+   or restarting the browser now signs the person out. */
+check('token is kept in sessionStorage, so it does not cross into a new tab',
+  window.sessionStorage.getItem('app_token') === 'TOK', window.sessionStorage.getItem('app_token'));
+check('token is not left in localStorage', !window.localStorage.getItem('app_token'));
 
 // ---- diagnostics ----
 console.log('\nWhat each dashboard drew:');
